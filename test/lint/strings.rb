@@ -1,3 +1,7 @@
+require File.expand_path("../redis_mock", File.dirname(__FILE__))
+
+include RedisMock::Helper
+
 test "SET and GET" do |r|
   r.set("foo", "s1")
 
@@ -33,14 +37,12 @@ test "SET and GET with ASCII characters" do |r|
   end
 end if defined?(Encoding)
 
-test "SETEX" do |r|
-  r.setex("foo", 1, "s1")
+test "SETEX" do
+  redis_mock(:setex => lambda { |*args| "+#{args.join(" ")}" }) do
+    r = Redis.new(OPTIONS.merge(:port => MOCK_PORT))
 
-  assert "s1" == r.get("foo")
-
-  sleep 2
-
-  assert nil == r.get("foo")
+    assert_equal "foo 1 s1", r.setex("foo", 1, "s1")
+  end
 end
 
 test "GETSET" do |r|
@@ -93,12 +95,6 @@ test "APPEND" do |r|
   r.append "foo", "1"
 
   assert "s1" == r.get("foo")
-end
-
-test "SUBSTR" do |r|
-  r.set "foo", "lorem"
-
-  assert "ore" == r.substr("foo", 1, 3)
 end
 
 test "GETBIT" do |r|

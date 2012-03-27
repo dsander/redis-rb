@@ -1,8 +1,11 @@
+require "redis/errors"
+
 class Redis
   class Client
     attr_accessor :db, :host, :port, :path, :password, :logger
     attr :timeout
     attr :connection
+    attr :command_map
 
     def initialize(options = {})
       @path = options[:path]
@@ -17,6 +20,7 @@ class Redis
       @logger = options[:logger]
       @reconnect = true
       @connection = Connection.drivers.last.new
+      @command_map = {}
     end
 
     def connect
@@ -34,43 +38,25 @@ class Redis
       @path || "#{@host}:#{@port}"
     end
 
-    # Starting with 2.2.1, assume that this method is called with a single
-    # array argument. Check its size for backwards compat.
-    def call(*args)
-      if args.first.is_a?(Array) && args.size == 1
-        command = args.first
-      else
-        command = args
-      end
-
+    def call(command, &block)
       reply = process([command]) { read }
-      raise reply if reply.is_a?(RuntimeError)
-      reply
-    end
+      raise reply if reply.is_a?(CommandError)
 
-    # Assume that this method is called with a single array argument. No
-    # backwards compat here, since it was introduced in 2.2.2.
-    def call_without_reply(command)
-      process([command])
-      nil
-    end
-
-    # Starting with 2.2.1, assume that this method is called with a single
-    # array argument. Check its size for backwards compat.
-    def call_loop(*args)
-      if args.first.is_a?(Array) && args.size == 1
-        command = args.first
+      if block
+        block.call(reply)
       else
-        command = args
+        reply
       end
+    end
 
+    def call_loop(command)
       error = nil
 
       result = without_socket_timeout do
         process([command]) do
           loop do
             reply = read
-            if reply.is_a?(RuntimeError)
+            if reply.is_a?(CommandError)
               error = reply
               break
             else
@@ -87,48 +73,67 @@ class Redis
       result
     end
 
-    def call_pipelined(commands, options = {})
-      options[:raise] = true unless options.has_key?(:raise)
+    def call_pipeline(pipeline)
+      without_reconnect_wrapper = lambda do |&blk| blk.call end
+      without_reconnect_wrapper = lambda do |&blk|
+        without_reconnect(&blk)
+      end if pipeline.without_reconnect?
+
+      shutdown_wrapper = lambda do |&blk| blk.call end
+      shutdown_wrapper = lambda do |&blk|
+        begin
+          blk.call
+        rescue ConnectionError
+          # Assume the pipeline was sent in one piece, but execution of
+          # SHUTDOWN caused none of the replies for commands that were executed
+          # prior to it from coming back around.
+          nil
+        end
+      end if pipeline.shutdown?
+
+      without_reconnect_wrapper.call do
+        shutdown_wrapper.call do
+          pipeline.finish(call_pipelined(pipeline.commands))
+        end
+      end
+    end
+
+    def call_pipelined(commands)
+      return [] if commands.empty?
 
       # The method #ensure_connected (called from #process) reconnects once on
       # I/O errors. To make an effort in making sure that commands are not
       # executed more than once, only allow reconnection before the first reply
       # has been read. When an error occurs after the first reply has been
-      # read, retrying would re-execute the entire pipeline, thus re-issueing
-      # already succesfully executed commands. To circumvent this, don't retry
-      # after the first reply has been read succesfully.
-      first = process(commands) { read }
-      error = first if first.is_a?(RuntimeError)
+      # read, retrying would re-execute the entire pipeline, thus re-issuing
+      # already successfully executed commands. To circumvent this, don't retry
+      # after the first reply has been read successfully.
+
+      result = Array.new(commands.size)
+      reconnect = @reconnect
 
       begin
-        remaining = commands.size - 1
-        if remaining > 0
-          replies = Array.new(remaining) do
-            reply = read
-            error ||= reply if reply.is_a?(RuntimeError)
-            reply
+        process(commands) do
+          result[0] = read
+
+          @reconnect = false
+
+          (commands.size - 1).times do |i|
+            result[i + 1] = read
           end
-          replies.unshift first
-          replies
-        else
-          replies = [first]
         end
-      rescue Exception
-        disconnect
-        raise
+      ensure
+        @reconnect = reconnect
       end
 
-      # Raise first error in pipeline when we should raise.
-      raise error if error && options[:raise]
-
-      replies
+      result
     end
 
-    def call_without_timeout(*args)
+    def call_without_timeout(command, &blk)
       without_socket_timeout do
-        call(*args)
+        call(command, &blk)
       end
-    rescue Errno::ECONNRESET
+    rescue ConnectionError
       retry
     end
 
@@ -136,6 +141,11 @@ class Redis
       logging(commands) do
         ensure_connected do
           commands.each do |command|
+            if command_map[command.first]
+              command = command.dup
+              command[0] = command_map[command.first]
+            end
+
             connection.write(command)
           end
 
@@ -157,20 +167,23 @@ class Redis
       connect
     end
 
+    def io
+      yield
+    rescue TimeoutError
+      raise TimeoutError, "Connection timed out"
+    rescue Errno::ECONNRESET, Errno::EPIPE, Errno::ECONNABORTED, Errno::EBADF, Errno::EINVAL => e
+      raise ConnectionError, "Connection lost (%s)" % [e.class.name.split("::").last]
+    end
+
     def read
-      begin
+      io do
         connection.read
+      end
+    end
 
-      rescue Errno::EAGAIN
-        # We want to make sure it reconnects on the next command after the
-        # timeout. Otherwise the server may reply in the meantime leaving
-        # the protocol in a desync status.
-        disconnect
-
-        raise Errno::EAGAIN, "Timeout reading from the socket"
-
-      rescue Errno::ECONNRESET
-        raise Errno::ECONNRESET, "Connection lost"
+    def write(command)
+      io do
+        connection.write(command)
       end
     end
 
@@ -178,10 +191,10 @@ class Redis
       connect unless connected?
 
       begin
-        self.timeout = 0
+        connection.timeout = 0
         yield
       ensure
-        self.timeout = @timeout if connected?
+        connection.timeout = @timeout if connected?
       end
     end
 
@@ -207,37 +220,29 @@ class Redis
 
       begin
         commands.each do |name, *args|
-          @logger.debug("Redis >> #{name.to_s.upcase} #{args.join(" ")}")
+          @logger.debug("Redis >> #{name.to_s.upcase} #{args.map(&:to_s).join(" ")}")
         end
 
         t1 = Time.now
         yield
       ensure
-        @logger.debug("Redis >> %0.2fms" % ((Time.now - t1) * 1000))
+        @logger.debug("Redis >> %0.2fms" % ((Time.now - t1) * 1000)) if t1
       end
     end
 
     def establish_connection
-      # Need timeout in usecs, like socket timeout.
-      timeout = Integer(@timeout * 1_000_000)
-
       if @path
         connection.connect_unix(@path, timeout)
       else
         connection.connect(@host, @port, timeout)
       end
 
-      # If the timeout is set we set the low level socket options in order
-      # to make sure a blocking read will return after the specified number
-      # of seconds. This hack is from memcached ruby client.
-      self.timeout = @timeout
+      connection.timeout = @timeout
 
+    rescue TimeoutError
+      raise CannotConnectError, "Timed out connecting to Redis on #{location}"
     rescue Errno::ECONNREFUSED
-      raise Errno::ECONNREFUSED, "Unable to connect to Redis on #{location}"
-    end
-
-    def timeout=(timeout)
-      connection.timeout = Integer(timeout * 1_000_000)
+      raise CannotConnectError, "Error connecting to Redis on #{location} (ECONNREFUSED)"
     end
 
     def ensure_connected
@@ -248,13 +253,13 @@ class Redis
         tries += 1
 
         yield
-      rescue Errno::ECONNRESET, Errno::EPIPE, Errno::ECONNABORTED, Errno::EBADF, Errno::EINVAL
+      rescue ConnectionError
         disconnect
 
         if tries < 2 && @reconnect
           retry
         else
-          raise Errno::ECONNRESET
+          raise
         end
       rescue Exception
         disconnect

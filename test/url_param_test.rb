@@ -40,7 +40,7 @@ end
 test "does not modify the passed options" do
   options = { :url => "redis://:secr3t@foo.com:999/2" }
 
-  redis = Redis.connect(options)
+  Redis.connect(options)
 
   assert({ :url => "redis://:secr3t@foo.com:999/2" } == options)
 end
@@ -57,4 +57,3 @@ test "uses REDIS_URL over default if available" do
 
   ENV.delete("REDIS_URL")
 end
-

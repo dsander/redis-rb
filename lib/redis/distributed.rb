@@ -180,10 +180,6 @@ class Redis
       node_for(key).append(key, value)
     end
 
-    def substr(key, start, stop)
-      node_for(key).substr(key, start, stop)
-    end
-
     def []=(key,value)
       set(key, value)
     end
@@ -208,7 +204,7 @@ class Redis
     end
 
     def mapped_mset(hash)
-      mset(*hash.to_a.flatten)
+      raise CannotDistribute, :mapped_mset
     end
 
     # Set multiple keys to multiple values, only if none of the keys exist.
@@ -240,12 +236,12 @@ class Redis
       node_for(key).decrby(key, decrement)
     end
 
-    # Append a value to a list.
+    # Append one or more values to a list.
     def rpush(key, value)
       node_for(key).rpush(key, value)
     end
 
-    # Prepend a value to a list.
+    # Prepend one or more values to a list.
     def lpush(key, value)
       node_for(key).lpush(key, value)
     end
@@ -318,14 +314,14 @@ class Redis
       end
     end
 
-    # Add a member to a set.
-    def sadd(key, value)
-      node_for(key).sadd(key, value)
+    # Add one or more members to a set.
+    def sadd(key, member)
+      node_for(key).sadd(key, member)
     end
 
-    # Remove a member from a set.
-    def srem(key, value)
-      node_for(key).srem(key, value)
+    # Remove one or more members from a set.
+    def srem(key, member)
+      node_for(key).srem(key, member)
     end
 
     # Remove and return a random member from a set.
@@ -402,12 +398,13 @@ class Redis
       node_for(key).srandmember(key)
     end
 
-    # Add a member to a sorted set, or update its score if it already exists.
-    def zadd(key, score, member)
-      node_for(key).zadd(key, score, member)
+    # Add one or more members to a sorted set, or update the score for members
+    # that already exist.
+    def zadd(key, *args)
+      node_for(key).zadd(key, *args)
     end
 
-    # Remove a member from a sorted set.
+    # Remove one or more members from a sorted set.
     def zrem(key, member)
       node_for(key).zrem(key, member)
     end
@@ -465,6 +462,11 @@ class Redis
       node_for(key).zcard(key)
     end
 
+    # Get the number of members in a particular score range.
+    def zcount(key, min, max)
+      node_for(key).zcount(key, min, max)
+    end
+
     # Get the score associated with the given member in a sorted set.
     def zscore(key, member)
       node_for(key).zscore(key, member)
@@ -490,12 +492,17 @@ class Redis
       node_for(key).hset(key, field, value)
     end
 
+    # Set the value of a hash field, only if the field does not exist.
+    def hsetnx(key, field, value)
+      node_for(key).hsetnx(key, field, value)
+    end
+
     # Get the value of a hash field.
     def hget(key, field)
       node_for(key).hget(key, field)
     end
 
-    # Delete a hash field.
+    # Delete one or more hash fields.
     def hdel(key, field)
       node_for(key).hdel(key, field)
     end

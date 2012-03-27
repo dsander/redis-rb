@@ -6,12 +6,28 @@ test "RPUSH" do |r|
   assert "s2" == r.rpop("foo")
 end
 
+test "Variadic RPUSH" do |r|
+  next if version(r) < 203090 # 2.4-rc6
+
+  assert 3 == r.rpush("foo", ["s1", "s2", "s3"])
+  assert 3 == r.llen("foo")
+  assert "s3" == r.rpop("foo")
+end
+
 test "LPUSH" do |r|
   r.lpush "foo", "s1"
   r.lpush "foo", "s2"
 
   assert 2 == r.llen("foo")
   assert "s2" == r.lpop("foo")
+end
+
+test "Variadic LPUSH" do |r|
+  next if version(r) < 203090 # 2.4-rc6
+
+  assert 3 == r.lpush("foo", ["s1", "s2", "s3"])
+  assert 3 == r.llen("foo")
+  assert "s3" == r.lpop("foo")
 end
 
 test "LLEN" do |r|
@@ -59,7 +75,7 @@ test "LSET" do |r|
   assert r.lset("foo", 1, "s3")
   assert "s3" == r.lindex("foo", 1)
 
-  assert_raise RuntimeError do
+  assert_raise Redis::CommandError do
     r.lset("foo", 4, "s3")
   end
 end
@@ -89,5 +105,3 @@ test "RPOP" do |r|
   assert "s2" == r.rpop("foo")
   assert 1 == r.llen("foo")
 end
-
-

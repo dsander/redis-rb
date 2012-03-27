@@ -4,15 +4,19 @@ module RedisMock
   class Server
     VERBOSE = false
 
-    def initialize(port = 6380, &block)
+    def initialize(port, &block)
       @server = TCPServer.new("127.0.0.1", port)
       @server.setsockopt(Socket::SOL_SOCKET,Socket::SO_REUSEADDR, true)
+    end
+
+    def start(&block)
       @thread = Thread.new { run(&block) }
     end
 
-    # This raises an exception in the thread calling @server.accept which
-    # in turn will cause the thread to terminate.
+    # Bail out of @server.accept before closing the socket. This is required
+    # to avoid EADDRINUSE after a couple of iterations.
     def shutdown
+      @thread.terminate if @thread
       @server.close if @server
     rescue => ex
       $stderr.puts "Error closing mock server: #{ex.message}" if VERBOSE
@@ -34,12 +38,18 @@ module RedisMock
 
             response = yield(*parts)
 
-            if response.nil?
+            # Convert a nil response to :close
+            response ||= :close
+
+            if response == :exit
               session.shutdown(Socket::SHUT_RDWR)
-              break
+              return # exit server body
+            elsif response == :close
+              session.shutdown(Socket::SHUT_RDWR)
+              break # exit connection body
             else
               session.write(response)
-              session.write("\r\n")
+              session.write("\r\n") unless response.end_with?("\r\n")
             end
           end
         rescue Errno::ECONNRESET
@@ -49,22 +59,29 @@ module RedisMock
     rescue => ex
       $stderr.puts "Error running mock server: #{ex.message}" if VERBOSE
       $stderr.puts ex.backtrace if VERBOSE
+    ensure
+      @server.close
     end
   end
 
   module Helper
-    # Starts a mock Redis server in a thread on port 6380.
+
+    MOCK_PORT = 6382
+
+    # Starts a mock Redis server in a thread.
     #
     # The server will reply with a `+OK` to all commands, but you can
     # customize it by providing a hash. For example:
     #
     #     redis_mock(:ping => lambda { "+PONG" }) do
-    #       assert_equal "PONG", Redis.new(:port => 6380).ping
+    #       assert_equal "PONG", Redis.new(:port => MOCK_PORT).ping
     #     end
     #
     def redis_mock(replies = {})
+      server = Server.new(MOCK_PORT)
+
       begin
-        server = Server.new do |command, *args|
+        server.start do |command, *args|
           (replies[command.to_sym] || lambda { |*_| "+OK" }).call(*args)
         end
 
@@ -74,6 +91,7 @@ module RedisMock
 
       ensure
         server.shutdown
+        sleep 0.1 # Allow some time for cleanup
       end
     end
   end

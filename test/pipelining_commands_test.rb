@@ -76,6 +76,69 @@ test "Returning the result of a pipeline" do |r|
   assert ["OK", "bar", nil] == result
 end
 
+test "Assignment of results inside the block" do |r|
+  r.pipelined do
+    @first = r.sadd("foo", 1)
+    @second = r.sadd("foo", 1)
+  end
+
+  assert_equal true, @first.value
+  assert_equal false, @second.value
+end
+
+# Although we could support accessing the values in these futures,
+# it doesn't make a lot of sense.
+test "Assignment of results inside the block with errors" do |r|
+  assert_raise do
+    r.pipelined do
+      r.doesnt_exist
+      @first = r.sadd("foo", 1)
+      r.doesnt_exist
+      @second = r.sadd("foo", 1)
+      r.doesnt_exist
+    end
+  end
+
+  assert_raise(Redis::FutureNotReady) { @first.value }
+  assert_raise(Redis::FutureNotReady) { @second.value }
+end
+
+test "Assignment of results inside a nested block" do |r|
+  r.pipelined do
+    @first = r.sadd("foo", 1)
+
+    r.pipelined do
+      @second = r.sadd("foo", 1)
+    end
+  end
+
+  assert_equal true, @first.value
+  assert_equal false, @second.value
+end
+
+test "Futures raise when confused with something else" do |r|
+  r.pipelined do
+    @result = r.sadd("foo", 1)
+  end
+
+  assert_raise(NoMethodError) { @result.to_s }
+end
+
+test "Futures raise when trying to access their values too early" do |r|
+  r.pipelined do
+    assert_raise(Redis::FutureNotReady) do
+      r.sadd("foo", 1).value
+    end
+  end
+end
+
+test "Returning the result of an empty pipeline" do |r|
+  result = r.pipelined do
+  end
+
+  assert [] == result
+end
+
 test "Nesting pipeline blocks" do |r|
   r.pipelined do
     r.set("foo", "s1")
@@ -88,29 +151,29 @@ test "Nesting pipeline blocks" do |r|
   assert "s2" == r.get("bar")
 end
 
-test "INFO in a pipeline" do |r|
+test "INFO in a pipeline returns hash" do |r|
   result = r.pipelined do
     r.info
   end
 
-  assert result.first.kind_of?(String)
+  assert result.first.kind_of?(Hash)
 end
 
-test "CONFIG GET in a pipeline" do |r|
+test "CONFIG GET in a pipeline returns hash" do |r|
   result = r.pipelined do
     r.config(:get, "*")
   end
 
-  assert result.first.kind_of?(Array)
+  assert result.first.kind_of?(Hash)
 end
 
-test "HGETALL in a pipeline should not return hash" do |r|
+test "HGETALL in a pipeline returns hash" do |r|
   r.hmset("hash", "field", "value")
   result = r.pipelined do
     r.hgetall("hash")
   end
 
-  assert ["field", "value"] == result.first
+  assert result.first == { "field" => "value" }
 end
 
 test "KEYS in a pipeline" do |r|

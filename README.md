@@ -1,6 +1,9 @@
-# redis-rb
+# redis-rb [![Build Status](https://secure.travis-ci.org/redis/redis-rb.png?branch=master)](http://travis-ci.org/redis/redis-rb)
 
 A Ruby client library for the [Redis](http://redis.io) key-value store.
+
+A simple Ruby client trying to match Redis' API one-to-one while still providing a Rubystic interface.
+It features thread safety, client-side sharding, and an obsession for performance.
 
 ## A note about versions
 
@@ -100,6 +103,9 @@ All users and admins:
 
 Redis only stores strings as values. If you want to store an object inside a key, you can use a serialization/deseralization mechanism like JSON:
 
+    >> require 'json'
+    => true
+
     >> redis.set "foo", [1, 2, 3].to_json
     => OK
 
@@ -115,15 +121,11 @@ You can use `MULTI/EXEC` to run arbitrary commands in an atomic fashion:
       redis.incr "baz"
     end
 
-## Multithreaded Operation
+## Multi-threading
 
-Starting with redis-rb 2.2.0, the client is thread-safe by default. To use
-earlier versions safely in a multithreaded environment, be sure to initialize
-the client with `:thread_safe => true`. Thread-safety can be explicitly
-disabled for versions 2.2 and up by initializing the client with `:thread_safe
-=> false`.
-
-See the tests and benchmarks for examples.
+Starting with version 2.2.0, the client is thread-safe by default. To use
+earlier versions safely in a multi-threaded environment, be sure to initialize
+the client with `:thread_safe => true`.
 
 ## Alternate drivers
 
@@ -205,4 +207,4 @@ all contributors)
 
 ## Contributing
 
-[Fork the project](http://github.com/ezmobius/redis-rb) and send pull requests. You can also ask for help at `#redis-rb` on Freenode.
+[Fork the project](https://github.com/redis/redis-rb) and send pull requests. You can also ask for help at `#redis-rb` on Freenode.

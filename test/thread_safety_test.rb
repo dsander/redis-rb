@@ -7,7 +7,9 @@ setup do
 end
 
 test "thread safety" do
-  redis = Redis.connect(OPTIONS.merge(:thread_safe => true))
+  next unless driver == :ruby || driver == :hiredis
+
+  redis = Redis.connect(OPTIONS)
 
   redis.set "foo", 1
   redis.set "bar", 2

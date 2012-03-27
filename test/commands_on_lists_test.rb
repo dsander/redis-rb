@@ -33,7 +33,7 @@ test "LINSERT" do |r|
 
   assert ["s1", "s2", "s3"] == r.lrange("foo", 0, -1)
 
-  assert_raise(RuntimeError) do
+  assert_raise(Redis::CommandError) do
     r.linsert "foo", :anywhere, "s3", "s2"
   end
 end
@@ -52,9 +52,9 @@ test "BRPOPLPUSH" do |r|
   r.rpush "foo", "s1"
   r.rpush "foo", "s2"
 
-  assert_equal "s2", r.brpoplpush("foo", "bar", 1)
+  assert_equal "s2", r.brpoplpush("foo", "bar", :timeout => 1)
 
-  assert_equal nil, r.brpoplpush("baz", "qux", 1)
+  assert_equal nil, r.brpoplpush("baz", "qux", :timeout => 1)
 
   assert_equal ["s2"], r.lrange("bar", 0, -1)
 end

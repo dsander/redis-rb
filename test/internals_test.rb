@@ -16,17 +16,27 @@ $TEST_PIPELINING = true
 load File.expand_path("./lint/internals.rb", File.dirname(__FILE__))
 
 test "provides a meaningful inspect" do |r, _|
-  assert "#<Redis client v#{Redis::VERSION} connected to redis://127.0.0.1:6379/15 (Redis v#{r.info["redis_version"]})>" == r.inspect
+  assert "#<Redis client v#{Redis::VERSION} connected to redis://127.0.0.1:#{PORT}/15 (Redis v#{r.info["redis_version"]})>" == r.inspect
 end
 
-test "Redis.current" do
-  Redis.current.set("foo", "bar")
+test "Redis.current" do |r, _|
+  assert "127.0.0.1" == Redis.current.client.host
+  assert 6379 == Redis.current.client.port
+  assert 0 == Redis.current.client.db
 
-  assert "bar" == Redis.current.get("foo")
+  Redis.current = Redis.new(OPTIONS.merge(:port => 6380, :db => 1))
 
-  Redis.current = Redis.new(OPTIONS.merge(:db => 14))
+  t = Thread.new do
+    assert "127.0.0.1" == Redis.current.client.host
+    assert 6380 == Redis.current.client.port
+    assert 1 == Redis.current.client.db
+  end
 
-  assert Redis.current.get("foo").nil?
+  t.join
+
+  assert "127.0.0.1" == Redis.current.client.host
+  assert 6380 == Redis.current.client.port
+  assert 1 == Redis.current.client.db
 end
 
 test "Timeout" do
@@ -35,20 +45,11 @@ test "Timeout" do
   end
 end
 
-# Don't use assert_raise because Timeour::Error in 1.8 inherits
-# Exception instead of StandardError (on 1.9).
 test "Connection timeout" do
-  # EM immediately raises CONNREFUSED
   next if driver == :synchrony
 
-  result = false
-
-  begin
+  assert_raise Redis::CannotConnectError do
     Redis.new(OPTIONS.merge(:host => "10.255.255.254", :timeout => 0.1)).ping
-  rescue Timeout::Error
-    result = true
-  ensure
-    assert result
   end
 end
 
@@ -63,7 +64,7 @@ test "Retry when first read raises ECONNRESET" do
   end
 
   redis_mock(:ping => command) do
-    redis = Redis.connect(:port => 6380, :timeout => 0.1)
+    redis = Redis.connect(:port => MOCK_PORT, :timeout => 0.1)
     assert "2" == redis.ping
   end
 end
@@ -79,8 +80,8 @@ test "Don't retry when wrapped inside #without_reconnect" do
   end
 
   redis_mock(:ping => command) do
-    redis = Redis.connect(:port => 6380, :timeout => 0.1)
-    assert_raise Errno::ECONNRESET do
+    redis = Redis.connect(:port => MOCK_PORT, :timeout => 0.1)
+    assert_raise Redis::ConnectionError do
       redis.without_reconnect do
         redis.ping
       end
@@ -102,8 +103,8 @@ test "Retry only once when read raises ECONNRESET" do
   end
 
   redis_mock(:ping => command) do
-    redis = Redis.connect(:port => 6380, :timeout => 0.1)
-    assert_raise Errno::ECONNRESET do
+    redis = Redis.connect(:port => MOCK_PORT, :timeout => 0.1)
+    assert_raise Redis::ConnectionError do
       redis.ping
     end
 
@@ -122,8 +123,8 @@ test "Don't retry when second read in pipeline raises ECONNRESET" do
   end
 
   redis_mock(:ping => command) do
-    redis = Redis.connect(:port => 6380, :timeout => 0.1)
-    assert_raise Errno::ECONNRESET do
+    redis = Redis.connect(:port => MOCK_PORT, :timeout => 0.1)
+    assert_raise Redis::ConnectionError do
       redis.pipelined do
         redis.ping
         redis.ping # Second #read times out
@@ -138,23 +139,21 @@ test "Connecting to UNIX domain socket" do
   end
 end
 
-# Using a mock server in a thread doesn't work here (possibly because blocking
-# socket ops, raw socket timeouts and Ruby's thread scheduling don't mix).
-test "Bubble EAGAIN without retrying" do
-  cmd = %{(sleep 0.3; echo "+PONG\r\n") | nc -l 6380}
-  IO.popen(cmd) do |_|
-    sleep 0.1 # Give nc a little time to start listening
-    redis = Redis.connect(:port => 6380, :timeout => 0.1)
+if driver == :ruby || driver == :hiredis
+  # Using a mock server in a thread doesn't work here (possibly because blocking
+  # socket ops, raw socket timeouts and Ruby's thread scheduling don't mix).
+  test "Bubble EAGAIN without retrying" do
+    cmd = %{(sleep 0.3; echo "+PONG\r\n") | nc -l 6380}
+    IO.popen(cmd) do |_|
+      sleep 0.1 # Give nc a little time to start listening
+      redis = Redis.connect(:port => 6380, :timeout => 0.1)
 
-    begin
-      assert_raise(Errno::EAGAIN) { redis.ping }
-    ensure
-      # Explicitly close connection so nc can quit
-      redis.client.disconnect
-
-      # Make the reactor loop do a tick to really close
-      EM::Synchrony.sleep(0) if driver == :synchrony
+      begin
+        assert_raise(Redis::TimeoutError) { redis.ping }
+      ensure
+        # Explicitly close connection so nc can quit
+        redis.client.disconnect
+      end
     end
   end
 end
-

@@ -32,15 +32,15 @@ test "MGET mapped" do |r|
   assert nil  == response["baz"]
 end
 
-test "Mapped MGET in a pipeline returns plain array" do |r|
+test "Mapped MGET in a pipeline returns hash" do |r|
   r.set("foo", "s1")
   r.set("bar", "s2")
 
   result = r.pipelined do
-    assert nil == r.mapped_mget("foo", "bar")
+    r.mapped_mget("foo", "bar")
   end
 
-  assert result[0] == ["s1", "s2"]
+  assert result[0] == { "foo" => "s1", "bar" => "s2" }
 end
 
 test "MSET" do |r|
@@ -59,18 +59,26 @@ end
 
 test "MSETNX" do |r|
   r.set("foo", "s1")
-  r.msetnx(:foo, "s2", :bar, "s3")
-
+  assert false == r.msetnx(:foo, "s2", :bar, "s3")
   assert "s1" == r.get("foo")
   assert nil == r.get("bar")
+
+  r.del("foo")
+  assert true == r.msetnx(:foo, "s2", :bar, "s3")
+  assert "s2" == r.get("foo")
+  assert "s3" == r.get("bar")
 end
 
 test "MSETNX mapped" do |r|
   r.set("foo", "s1")
-  r.mapped_msetnx(:foo => "s2", :bar => "s3")
-
+  assert false == r.mapped_msetnx(:foo => "s2", :bar => "s3")
   assert "s1" == r.get("foo")
   assert nil == r.get("bar")
+
+  r.del("foo")
+  assert true == r.mapped_msetnx(:foo => "s2", :bar => "s3")
+  assert "s2" == r.get("foo")
+  assert "s3" == r.get("bar")
 end
 
 test "STRLEN" do |r|

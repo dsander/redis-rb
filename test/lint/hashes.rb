@@ -4,14 +4,41 @@ test "HSET and HGET" do |r|
   assert "s1" == r.hget("foo", "f1")
 end
 
+test "HSETNX" do |r|
+  r.hset("foo", "f1", "s1")
+  r.hsetnx("foo", "f1", "s2")
+
+  assert "s1" == r.hget("foo", "f1")
+
+  r.del("foo")
+  r.hsetnx("foo", "f1", "s2")
+
+  assert "s2" == r.hget("foo", "f1")
+end
+
 test "HDEL" do |r|
   r.hset("foo", "f1", "s1")
 
   assert "s1" == r.hget("foo", "f1")
 
-  r.hdel("foo", "f1")
+  assert 1 == r.hdel("foo", "f1")
 
   assert nil == r.hget("foo", "f1")
+end
+
+test "Variadic HDEL" do |r|
+  next if version(r) < 203090
+
+  r.hset("foo", "f1", "s1")
+  r.hset("foo", "f2", "s2")
+
+  assert "s1" == r.hget("foo", "f1")
+  assert "s2" == r.hget("foo", "f2")
+
+  assert 2 == r.hdel("foo", ["f1", "f2"])
+
+  assert nil == r.hget("foo", "f1")
+  assert nil == r.hget("foo", "f2")
 end
 
 test "HEXISTS" do |r|
@@ -69,7 +96,7 @@ test "HMSET" do |r|
 end
 
 test "HMSET with invalid arguments" do |r|
-  assert_raise(RuntimeError) do
+  assert_raise(Redis::CommandError) do
     r.hmset("hash", "foo1", "bar1", "foo2", "bar2", "foo3")
   end
 end
@@ -111,4 +138,3 @@ test "HINCRBY" do |r|
 
   assert "2" == r.hget("foo", "f1")
 end
-

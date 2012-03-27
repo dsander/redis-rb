@@ -8,4 +8,12 @@ setup do
   init Redis::Distributed.new(NODES, :logger => ::Logger.new(log))
 end
 
-load './test/lint/hashes.rb'
+load './test/lint/sorted_sets.rb'
+
+test "ZCOUNT" do |r|
+  r.zadd "foo", 1, "s1"
+  r.zadd "foo", 2, "s2"
+  r.zadd "foo", 3, "s3"
+
+  assert 2 == r.zcount("foo", 2, 3)
+end

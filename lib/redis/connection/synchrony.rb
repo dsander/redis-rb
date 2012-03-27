@@ -1,5 +1,6 @@
 require "redis/connection/command_helper"
 require "redis/connection/registry"
+require "redis/errors"
 require "em-synchrony"
 require "hiredis/reader"
 
@@ -28,10 +29,11 @@ class Redis
 
         begin
           until (reply = @reader.gets) == false
+            reply = CommandError.new(reply.message) if reply.is_a?(RuntimeError)
             @req.succeed [:reply, reply]
           end
         rescue RuntimeError => err
-          @req.fail [:error, ::Redis::ProtocolError.new(err.message)]
+          @req.fail [:error, ProtocolError.new(err.message)]
         end
       end
 
@@ -59,7 +61,7 @@ class Redis
       include Redis::Connection::CommandHelper
 
       def initialize
-        @timeout = 5_000_000
+        @timeout = 5.0
         @connection = nil
       end
 
@@ -67,13 +69,13 @@ class Redis
         @connection && @connection.connected?
       end
 
-      def timeout=(usecs)
-        @timeout = usecs
+      def timeout=(timeout)
+        @timeout = timeout
       end
 
       def connect(host, port, timeout)
         conn = EventMachine.connect(host, port, RedisClient) do |c|
-          c.pending_connect_timeout = [Float(timeout / 1_000_000), 0.1].max
+          c.pending_connect_timeout = [timeout, 0.1].max
         end
 
         setup_connect_callbacks(conn, Fiber.current)

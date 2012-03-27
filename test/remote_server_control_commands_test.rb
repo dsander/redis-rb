@@ -16,8 +16,8 @@ test "INFO" do |r|
 end
 
 test "INFO COMMANDSTATS" do |r|
-  # Only available on Redis >= 2.3.0
-  next if r.info["redis_version"] < "2.3.0"
+  # Only available on Redis >= 2.9.0
+  next if version(r) < 209000
 
   r.config(:resetstat)
   r.ping
@@ -26,7 +26,9 @@ test "INFO COMMANDSTATS" do |r|
   assert "1" == result["ping"]["calls"]
 end
 
-test "MONITOR" do |r|
+test "MONITOR (Redis < 2.5.0)" do |r|
+  next unless version(r) < 205000
+
   log = []
 
   wire = Wire.new do
@@ -43,6 +45,27 @@ test "MONITOR" do |r|
   wire.join
 
   assert log[-1][%q{(db 15) "set" "foo" "s1"}]
+end
+
+test "MONITOR (Redis >= 2.5.0)" do |r|
+  next unless version(r) >= 205000
+
+  log = []
+
+  wire = Wire.new do
+    Redis.new(OPTIONS).monitor do |line|
+      log << line
+      break if log.size == 2
+    end
+  end
+
+  Wire.pass while log.empty? # Faster than sleep
+
+  r.set "foo", "s1"
+
+  wire.join
+
+  assert log[-1] =~ /\[15 .*?\] "set" "foo" "s1"/
 end
 
 test "MONITOR returns value for break" do |r|
@@ -75,8 +98,14 @@ test "SYNC" do |r|
   replies = {:sync => lambda { "+OK" }}
 
   redis_mock(replies) do
-    redis = Redis.new(OPTIONS.merge(:port => 6380))
+    redis = Redis.new(OPTIONS.merge(:port => MOCK_PORT))
 
     assert "OK" == redis.sync
   end
+end
+
+test "SLOWLOG" do |r|
+  r.slowlog(:reset)
+  result = r.slowlog(:len)
+  assert result == 0
 end

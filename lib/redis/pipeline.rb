@@ -1,34 +1,106 @@
 class Redis
+  unless defined?(::BasicObject)
+    class BasicObject
+      instance_methods.each { |meth| undef_method(meth) unless meth =~ /\A(__|instance_eval)/ }
+    end
+  end
+
   class Pipeline
-    attr :commands
+    attr :futures
 
     def initialize
-      @commands = []
+      @without_reconnect = false
+      @shutdown = false
+      @futures = []
     end
 
-    # Starting with 2.2.1, assume that this method is called with a single
-    # array argument. Check its size for backwards compat.
-    def call(*args)
-      if args.first.is_a?(Array) && args.size == 1
-        command = args.first
-      else
-        command = args
+    def without_reconnect?
+      @without_reconnect
+    end
+
+    def shutdown?
+      @shutdown
+    end
+
+    def call(command, &block)
+      # A pipeline that contains a shutdown should not raise ECONNRESET when
+      # the connection is gone.
+      @shutdown = true if command.first == :shutdown
+      future = Future.new(command, block)
+      @futures << future
+      future
+    end
+
+    def call_pipeline(pipeline)
+      @shutdown = true if pipeline.shutdown?
+      @futures.concat(pipeline.futures)
+      nil
+    end
+
+    def commands
+      @futures.map { |f| f._command }
+    end
+
+    def without_reconnect(&block)
+      @without_reconnect = true
+      yield
+    end
+
+    def finish(replies)
+      futures.each_with_index.map do |future, i|
+        future._set(replies[i])
+      end
+    end
+
+    class Multi < self
+      def finish(replies)
+        return if replies.last.nil? # The transaction failed because of WATCH.
+
+        if replies.last.size < futures.size - 2
+          # Some command wasn't recognized by Redis.
+          raise replies.detect { |r| r.kind_of?(::Exception) }
+        end
+
+        super(replies.last)
       end
 
-      @commands << command
-      nil
+      def commands
+        [[:multi]] + super + [[:exec]]
+      end
+    end
+  end
+
+  class FutureNotReady < RuntimeError
+    def initialize
+      super("Value will be available once the pipeline executes.")
+    end
+  end
+
+  class Future < BasicObject
+    FutureNotReady = ::Redis::FutureNotReady.new
+
+    def initialize(command, transformation)
+      @command = command
+      @transformation = transformation
+      @object = FutureNotReady
     end
 
-    # Assume that this method is called with a single array argument. No
-    # backwards compat here, since it was introduced in 2.2.2.
-    def call_without_reply(command)
-      @commands.push command
-      nil
+    def inspect
+      "<Redis::Future #{@command.inspect}>"
     end
 
-    def call_pipelined(commands, options = {})
-      @commands.concat commands
-      nil
+    def _set(object)
+      @object = @transformation ? @transformation.call(object) : object
+      value
+    end
+
+    def _command
+      @command
+    end
+
+    def value
+      ::Kernel.raise(@object) if @object.kind_of?(::Exception)
+      @object
     end
   end
 end
